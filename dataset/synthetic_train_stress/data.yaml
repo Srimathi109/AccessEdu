@@ -1,0 +1,6 @@
+path: "C:/Users/shalu/AccessEdu-Sport/dataset/synthetic_train_stress"
+train: images
+val: images
+test: images
+nc: 5
+names: {0: No_Action, 1: No_Ball, 2: Out, 3: Six, 4: Wide}

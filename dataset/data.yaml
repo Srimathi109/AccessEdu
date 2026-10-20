@@ -1,0 +1,13 @@
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 5
+names: ['No_Action', 'No_Ball', 'Out', 'Six', 'Wide']
+
+roboflow:
+  workspace: prabu
+  project: cricket-umpire-action-detection
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/prabu/cricket-umpire-action-detection/dataset/1
