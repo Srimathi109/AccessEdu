@@ -13,7 +13,7 @@
   <header class="topbar">
     <a class="brand" href="{{ url_for('dashboard') if session.get('user_id') else url_for('login') }}"><span class="brand-mark">A</span><span>AccessEdu<small>UMPIRE PRACTICE LAB</small></span></a>
     {% if session.get('user_id') %}
-    <nav><a href="{{ url_for('dashboard') }}">{% if session.get('role') == 'instructor' %}Instructor overview{% else %}My practice{% endif %}</a><span class="user-chip">{{ session.get('display_name') }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button">Sign out</button></form></nav>
+    <nav><a href="{{ url_for('dashboard') }}">{% if session.get('role') == 'instructor' %}Instructor overview{% else %}My practice{% endif %}</a>{% if session.get('role') == 'instructor' %}<a href="{{ url_for('matches.index') }}">Match scoring</a>{% endif %}<span class="user-chip">{{ session.get('display_name') }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button">Sign out</button></form></nav>
     {% endif %}
   </header>
   <main class="page-shell" id="main-content">

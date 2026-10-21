@@ -186,6 +186,7 @@ def init_db():
         "SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM scenarios WHERE title=?)",
         [item + (item[0],) for item in samples],
     )
+    create_match_schema(db)
     db.commit()
     db.close()
 
@@ -231,17 +232,23 @@ def get_model():
 
 def analyze_image(path):
     """Classify one captured or uploaded still image."""
-    model = get_model()
     image = cv2.imread(str(path))
     if image is None:
         raise ValueError("The photo could not be opened. Choose a JPG, PNG, or WebP image.")
+    label, confidence = predict_frame(image)
+    return label, confidence, 1
+
+
+def predict_frame(image):
+    """Run the shared four-class cricket classifier on an OpenCV frame."""
+    model = get_model()
     result = model(image, imgsz=224, verbose=False)[0]
     probabilities = result.probs
     if probabilities is None:
-        raise ValueError("The selected image could not be classified. Choose another photo.")
+        raise ValueError("The image frame could not be classified. Try another frame.")
     class_id = int(probabilities.top1)
     confidence = float(probabilities.top1conf.item())
-    return model.names[class_id], confidence, 1
+    return model.names[class_id], confidence
 
 
 def feedback_for(expected, predicted, confidence):
@@ -634,6 +641,10 @@ def upload_too_large(_error):
     flash("That photo is over the 10 MB upload limit. Choose a smaller image.", "error")
     return redirect(request.referrer or url_for("dashboard"))
 
+
+from match_module import create_match_blueprint, create_match_schema
+
+app.register_blueprint(create_match_blueprint(database, role_required, predict_frame, MODEL_PATH))
 
 init_db()
 

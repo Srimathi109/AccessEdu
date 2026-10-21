@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Match scoring · AccessEdu{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">MODULE 2 · INSTRUCTOR WORKSPACE</p><h1>Cricket match scoring</h1><p>Create a match, review AI event proposals, and keep the official score under instructor control.</p></div></section>
+<div class="match-layout">
+  <section class="panel"><h2>Set up a match</h2><form method="post" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Match name<input name="title" maxlength="100" required placeholder="Weekend assessment match"></label>
+    <label>First batting team<input name="home_team" maxlength="80" required></label>
+    <label>Second batting team<input name="away_team" maxlength="80" required></label>
+    <label>Overs per innings<input name="overs_limit" type="number" min="1" max="50" value="10" required></label>
+    <button class="button primary">Create match</button>
+  </form></section>
+  <section class="panel"><h2>Matches</h2>{% if matches %}<div class="match-list">{% for match in matches %}<a class="match-list-item" href="{{ url_for('matches.detail', match_id=match.id) }}"><span><strong>{{ match.title }}</strong><small>{{ match.home_team }} vs {{ match.away_team }} · {{ match.overs_limit }} overs</small></span><span class="match-status {{ match.status }}">{{ match.status|title }}</span>{% if match.batting_team %}<b>{{ match.runs }} / {{ match.wickets }}<small>{{ match.legal_balls // 6 }}.{{ match.legal_balls % 6 }} overs · {{ match.batting_team }}</small></b>{% endif %}</a>{% endfor %}</div>{% else %}<p class="muted">No matches yet. Create one to start scoring.</p>{% endif %}</section>
+</div>
+<p class="notice">AI detects candidate umpire signals only. Confirm every event before it changes the scoreboard.</p>
+{% endblock %}
