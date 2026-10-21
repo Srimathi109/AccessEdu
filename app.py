@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import hmac
 import secrets
 import sqlite3
 import tempfile
@@ -26,13 +27,12 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 ROOT = Path(__file__).resolve().parent
-MODEL_PATH = ROOT / "runs" / "detect" / "accessedu_cricket_v1" / "weights" / "best.pt"
-EXPECTED_CLASSES = {"No_Action", "No_Ball", "Out", "Six", "Wide"}
+MODEL_PATH = ROOT / "runs" / "classify" / "accessedu_cricket_four_class" / "weights" / "best.pt"
+EXPECTED_CLASSES = {"No_Ball", "Out", "Six", "Wide"}
 _MODEL = None
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-ALLOWED_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 CLASS_LABELS = {
-    "No_Action": "No action detected",
     "No_Ball": "No Ball",
     "Out": "Out",
     "Six": "Six",
@@ -44,7 +44,38 @@ app.config.update(
     SECRET_KEY=os.environ.get("ACCESSEDU_SECRET_KEY") or secrets.token_hex(32),
     MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
     DATABASE=str(ROOT / "accessedu.sqlite3"),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("ACCESSEDU_HTTPS", "").lower() in {"1", "true", "yes"},
 )
+
+
+@app.context_processor
+def inject_csrf_token():
+    def csrf_token():
+        if "csrf_token" not in session:
+            session["csrf_token"] = secrets.token_urlsafe(32)
+        return session["csrf_token"]
+
+    return {"csrf_token": csrf_token}
+
+
+@app.before_request
+def protect_form_posts():
+    if request.method == "POST":
+        submitted = request.form.get("csrf_token", "")
+        expected = session.get("csrf_token", "")
+        if not submitted or not expected or not hmac.compare_digest(submitted, expected):
+            abort(400)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=()")
+    return response
 
 
 def database():
@@ -151,76 +182,28 @@ def get_model():
     from ultralytics import YOLO
 
     model = YOLO(str(MODEL_PATH))
-    if set(model.names.values()) != EXPECTED_CLASSES:
-        raise RuntimeError("The selected checkpoint does not contain the expected cricket signal classes.")
+    if model.task != "classify" or set(model.names.values()) != EXPECTED_CLASSES:
+        raise RuntimeError("The selected checkpoint is not the four-class cricket signal classifier.")
     _MODEL = model
     return _MODEL
 
 
-def analyze_video(path):
-    """Sample at most 24 frames and return the most consistently detected class."""
+def analyze_image(path):
+    """Classify one captured or uploaded still image."""
     model = get_model()
-    capture = cv2.VideoCapture(str(path))
-    if not capture.isOpened():
-        raise ValueError("The uploaded video could not be opened. Try an MP4 or MOV recording.")
-    fps = capture.get(cv2.CAP_PROP_FPS) or 25
-    frame_total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    duration = frame_total / fps if frame_total else 0
-    interval = max(1, round(fps * max(duration / 24, 0.5)))
-    frame_results = []
-    sampled_frames = 0
-    frame_index = 0
-
-    def classify(frame):
-        result = model(frame, conf=0.25, verbose=False)[0]
-        boxes = result.boxes
-        if boxes is None or len(boxes) == 0:
-            return None
-        best = int(boxes.conf.argmax().item())
-        class_id = int(boxes.cls[best].item())
-        return model.names[class_id], float(boxes.conf[best].item())
-
-    try:
-        if frame_total > 0:
-            sample_count = min(frame_total, 24)
-            divisor = max(sample_count - 1, 1)
-            indices = sorted({round(i * (frame_total - 1) / divisor) for i in range(sample_count)})
-            for index in indices:
-                capture.set(cv2.CAP_PROP_POS_FRAMES, index)
-                ok, frame = capture.read()
-                if not ok:
-                    continue
-                sampled_frames += 1
-                prediction = classify(frame)
-                if prediction:
-                    frame_results.append(prediction)
-        else:
-            while sampled_frames < 24:
-                ok, frame = capture.read()
-                if not ok:
-                    break
-                if frame_index % interval == 0:
-                    sampled_frames += 1
-                    prediction = classify(frame)
-                    if prediction:
-                        frame_results.append(prediction)
-                frame_index += 1
-    finally:
-        capture.release()
-    if not frame_results:
-        return "No_Action", 0.0, sampled_frames
-    counts = {}
-    for label, confidence in frame_results:
-        counts.setdefault(label, []).append(confidence)
-    # Prefer the most frequent signal; break ties by its mean confidence.
-    predicted = max(counts, key=lambda label: (len(counts[label]), sum(counts[label]) / len(counts[label])))
-    confidence = sum(counts[predicted]) / len(counts[predicted])
-    return predicted, confidence, sampled_frames
+    image = cv2.imread(str(path))
+    if image is None:
+        raise ValueError("The photo could not be opened. Choose a JPG, PNG, or WebP image.")
+    result = model(image, imgsz=224, verbose=False)[0]
+    probabilities = result.probs
+    if probabilities is None:
+        raise ValueError("The selected image could not be classified. Choose another photo.")
+    class_id = int(probabilities.top1)
+    confidence = float(probabilities.top1conf.item())
+    return model.names[class_id], confidence, 1
 
 
 def feedback_for(expected, predicted, confidence):
-    if predicted == "No_Action":
-        return "The model did not find a clear umpire signal. Try a brighter, steady recording with your full upper body visible."
     if predicted != expected:
         return (
             f"The model most often recognized {CLASS_LABELS.get(predicted, predicted)}, while this scenario expects "
@@ -250,9 +233,18 @@ def login():
             session["username"] = user["username"]
             session["display_name"] = user["display_name"]
             session["role"] = user["role"]
+            destination = request.args.get("next", "")
+            if destination.startswith("/") and not destination.startswith("//"):
+                return redirect(destination)
             return redirect(url_for("dashboard"))
         flash("That username or password was not recognized.", "error")
     return render_template("login.html")
+
+
+@app.route("/health")
+def health():
+    """Lightweight liveness check for a hosting platform."""
+    return {"status": "ok"}
 
 
 @app.route("/logout", methods=["POST"])
@@ -300,21 +292,23 @@ def submit_practice(scenario_id):
     ).fetchone()
     if scenario is None:
         abort(404)
-    video = request.files.get("video")
-    if not video or not video.filename:
-        flash("Record or choose a practice video first.", "error")
+    photo = request.files.get("photo")
+    if not photo or not photo.filename:
+        flash("Capture or choose a practice photo first.", "error")
         return redirect(url_for("practice", scenario_id=scenario_id))
-    filename = secure_filename(video.filename)
+    filename = secure_filename(photo.filename)
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if extension not in ALLOWED_EXTENSIONS:
-        flash("Choose a video file such as MP4 or MOV.", "error")
+    if extension not in ALLOWED_IMAGE_EXTENSIONS:
+        flash("Choose a photo file such as JPG, PNG, or WebP.", "error")
         return redirect(url_for("practice", scenario_id=scenario_id))
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix="." + extension) as temp_file:
             temp_path = temp_file.name
-            video.save(temp_path)
-        predicted, confidence, frame_count = analyze_video(temp_path)
+            photo.save(temp_path)
+        if os.path.getsize(temp_path) > MAX_UPLOAD_BYTES:
+            raise ValueError("That photo is over the 10 MB upload limit. Choose a smaller image.")
+        predicted, confidence, frame_count = analyze_image(temp_path)
     except (RuntimeError, ValueError) as exc:
         flash(str(exc), "error")
         return redirect(url_for("practice", scenario_id=scenario_id))
@@ -425,11 +419,11 @@ def forbidden(_error):
 
 @app.errorhandler(413)
 def upload_too_large(_error):
-    flash("That video is over the 100 MB upload limit. Record a shorter clip.", "error")
+    flash("That photo is over the 10 MB upload limit. Choose a smaller image.", "error")
     return redirect(request.referrer or url_for("dashboard"))
 
 
 init_db()
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5000)), debug=False)
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 5000)), debug=False)

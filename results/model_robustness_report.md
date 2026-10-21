@@ -1,8 +1,10 @@
-# Cricket signal model robustness check
+# Historical cricket detector robustness check
+
+> This report covers the earlier YOLO object detector and synthetic fine-tuning experiment. The app now uses the four-class image classifier described in [umpire_classifier_report.md](umpire_classifier_report.md); these historical detector metrics do not describe the active checkpoint.
 
 ## Summary
 
-The current checkpoint detects cricket umpire signals, but the available evidence does not support saying its predictions will always be correct. A stress set was generated from training images, then the current checkpoint and a fine-tuned candidate were evaluated on it. The fine-tuned candidate improved on this synthetic stress set but regressed on both the original validation set and the tiny held-out test set, so it was **not promoted**. The app continues to use `runs/detect/accessedu_cricket_v1/weights/best.pt`.
+At the time of this experiment, a stress set was generated from training images and the original detector and a fine-tuned candidate were evaluated on it. The candidate improved on the synthetic stress set but regressed on the original validation and tiny test splits, so it was not promoted. The app has since moved to a separately trained image classifier.
 
 ## Results
 
@@ -15,7 +17,7 @@ All evaluation runs used 640-pixel inference. Metrics are object-detection mAP, 
 
 The current checkpoint's mAP50-95 was 0.731 on validation, 0.870 on the nine-image test split, and 0.562 on the synthetic stress set. The candidate scored 0.608, 0.719, and 0.604 respectively.
 
-The original test split has only nine labeled objects and contains no `Out` examples. Its 0.995 score is therefore not evidence of dependable performance across all five classes. The synthetic set contains altered versions of training images the model may already have seen, so its score is a stress check only and must not be presented as an independent test accuracy.
+The original test split has only nine labeled objects and contains no `Out` examples. Its 0.995 score is therefore not evidence of dependable performance across the four supported classes. The synthetic set contains altered versions of training images the model may already have seen, so its score is a stress check only and must not be presented as an independent test accuracy.
 
 ## Synthetic set generation
 

@@ -1,94 +1,86 @@
 (() => {
   const preview = document.getElementById('preview');
   const placeholder = document.getElementById('placeholder');
-  const startCamera = document.getElementById('camera-start');
-  const startRecord = document.getElementById('record-start');
-  const stopRecord = document.getElementById('record-stop');
-  const indicator = document.getElementById('recording-indicator');
+  const countdown = document.getElementById('countdown');
   const message = document.getElementById('record-message');
-  const fileInput = document.getElementById('video-file');
-  const fileName = document.getElementById('file-name');
+  const fileInput = document.getElementById('photo-file');
+  const canvas = document.getElementById('capture-canvas');
   const form = document.getElementById('upload-form');
   const processing = document.getElementById('processing');
   let stream;
-  let recorder;
-  let chunks = [];
 
-  startCamera.addEventListener('click', async () => {
+  function stopCamera() {
+    stream?.getTracks().forEach(track => track.stop());
+    stream = null;
+    preview.srcObject = null;
+  }
+
+  function submitCapturedPhoto(blob) {
+    const file = new File([blob], `practice-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    stopCamera();
+    preview.hidden = true;
+    countdown.hidden = true;
+    processing.hidden = false;
+    message.textContent = 'Photo captured. Sending it for analysis…';
+    form.requestSubmit();
+  }
+
+  async function startAutomaticCapture() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      message.textContent = 'This browser cannot access a camera. Open the app in a browser that supports camera access.';
+      placeholder.querySelector('span').textContent = 'Camera is unavailable';
+      return;
+    }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       preview.srcObject = stream;
       preview.hidden = false;
       placeholder.hidden = true;
-      startCamera.textContent = 'Camera ready';
-      startCamera.disabled = true;
-      startRecord.disabled = !window.MediaRecorder;
-      message.textContent = window.MediaRecorder ? 'When ready, record a short signal and hold it clearly.' : 'Recording is unavailable in this browser. Choose a video file instead.';
+      await preview.play();
+
+      let remaining = 5;
+      countdown.textContent = remaining;
+      countdown.hidden = false;
+      message.textContent = 'Hold your signal steady. Capturing automatically…';
+
+      const timer = window.setInterval(() => {
+        remaining -= 1;
+        countdown.textContent = remaining > 0 ? remaining : '📷';
+        if (remaining > 0) return;
+        window.clearInterval(timer);
+        canvas.width = preview.videoWidth;
+        canvas.height = preview.videoHeight;
+        if (!canvas.width || !canvas.height) {
+          stopCamera();
+          countdown.hidden = true;
+          message.textContent = 'The camera did not provide an image. Reload the page and allow camera access.';
+          return;
+        }
+        canvas.getContext('2d').drawImage(preview, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          if (!blob) {
+            stopCamera();
+            countdown.hidden = true;
+            message.textContent = 'The photo could not be captured. Reload the page to try again.';
+            return;
+          }
+          submitCapturedPhoto(blob);
+        }, 'image/jpeg', 0.92);
+      }, 1000);
     } catch (error) {
-      message.textContent = 'Camera access was unavailable. Check browser permissions or choose a video file.';
+      stopCamera();
+      placeholder.querySelector('span').textContent = 'Camera access is needed';
+      message.textContent = 'Allow camera access in your browser, then reload this page. No recording or manual capture is required.';
     }
-  });
-
-  startRecord.addEventListener('click', () => {
-    if (!stream) return;
-    const mimeType = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4'].find(type => MediaRecorder.isTypeSupported(type));
-    if (!mimeType) {
-      message.textContent = 'This browser cannot create a supported recording. Choose a video file instead.';
-      return;
-    }
-    chunks = [];
-    recorder = new MediaRecorder(stream, { mimeType });
-    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mimeType });
-      const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-      const file = new File([blob], `practice-${Date.now()}.${ext}`, { type: mimeType });
-      const transfer = new DataTransfer();
-      transfer.items.add(file);
-      fileInput.files = transfer.files;
-      fileName.textContent = file.name;
-      message.textContent = 'Recording ready. Submit it to see your practice summary.';
-      preview.srcObject = null;
-      preview.src = URL.createObjectURL(blob);
-      preview.controls = true;
-      stream.getTracks().forEach(track => track.stop());
-      stream = null;
-      startCamera.disabled = false;
-      startCamera.textContent = 'Record again';
-      startRecord.disabled = true;
-      stopRecord.disabled = true;
-    };
-    recorder.start(500);
-    startRecord.disabled = true;
-    stopRecord.disabled = false;
-    indicator.hidden = false;
-    message.textContent = 'Recording… make the signal clearly, then stop.';
-  });
-
-  stopRecord.addEventListener('click', () => {
-    if (recorder && recorder.state !== 'inactive') recorder.stop();
-    indicator.hidden = true;
-  });
-
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files[0];
-    if (file) {
-      fileName.textContent = file.name;
-      if (preview.srcObject) {
-        preview.srcObject.getTracks().forEach(track => track.stop());
-        preview.srcObject = null;
-      }
-      preview.hidden = false;
-      preview.src = URL.createObjectURL(file);
-      preview.controls = true;
-      placeholder.hidden = true;
-      message.textContent = 'Video selected. Submit when you are ready.';
-    }
-  });
+  }
 
   form.addEventListener('submit', () => {
     processing.hidden = false;
-    form.querySelector('button[type="submit"]').disabled = true;
+    message.textContent = 'Analyzing your photo…';
   });
-  window.addEventListener('beforeunload', () => stream?.getTracks().forEach(track => track.stop()));
+  window.addEventListener('beforeunload', stopCamera);
+  startAutomaticCapture();
 })();

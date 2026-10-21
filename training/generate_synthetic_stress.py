@@ -14,7 +14,8 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = ["No_Action", "No_Ball", "Out", "Six", "Wide"]
+NAMES = ["No_Ball", "Out", "Six", "Wide"]
+ORIGINAL_CLASS_IDS = {1: 0, 2: 1, 3: 2, 4: 3}
 
 
 def read_labels(path: Path):
@@ -27,8 +28,11 @@ def read_labels(path: Path):
             raise ValueError(f"Expected YOLO detection row at {path}:{line_number}")
         class_id = int(values[0])
         cx, cy, width, height = map(float, values[1:])
-        if class_id < 0 or class_id >= len(NAMES):
+        if class_id == 0:
+            continue
+        if class_id not in ORIGINAL_CLASS_IDS:
             raise ValueError(f"Unexpected class id {class_id} in {path}:{line_number}")
+        class_id = ORIGINAL_CLASS_IDS[class_id]
         rows.append((class_id, cx, cy, width, height))
     return rows
 

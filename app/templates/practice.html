@@ -1,7 +1,37 @@
 {% extends 'base.html' %}{% block title %}Practice {{ scenario.expected_signal }} · AccessEdu{% endblock %}
 {% block content %}
 <a class="back-link" href="{{ url_for('dashboard') }}">← Back to practice</a>
-<div class="practice-layout"><section class="practice-info"><div class="eyebrow">PRACTICE SCENARIO</div><div class="signal-icon large">{{ '6' if scenario.expected_signal=='Six' else ('OUT' if scenario.expected_signal=='Out' else ('W' if scenario.expected_signal=='Wide' else 'NB')) }}</div><div class="scenario-type">EXPECTED SIGNAL · {{ scenario.expected_signal|replace('_',' ')|upper }}</div><h1>{{ scenario.title }}</h1><p>{{ scenario.description }}</p><div class="instruction-list"><div><span>01</span><p>Position your full upper body in view with enough light.</p></div><div><span>02</span><p>Make the signal clearly and hold it for a few seconds.</p></div><div><span>03</span><p>Upload your recording to receive a summary at the end.</p></div></div></section>
-<section class="panel recorder-panel"><div class="eyebrow">YOUR ATTEMPT</div><h2>Record or upload</h2><p class="muted">A short MP4, MOV, AVI, MKV, or WebM clip works best (up to 100 MB).</p><div class="recorder-box"><video id="preview" autoplay muted playsinline></video><div id="placeholder" class="preview-placeholder"><div class="camera-icon">◉</div><span>Camera preview appears here</span></div><div id="recording-indicator" class="recording-indicator" hidden>● Recording</div></div><div class="record-controls"><button type="button" id="camera-start" class="button secondary">Enable camera</button><button type="button" id="record-start" class="button primary" disabled>Start recording</button><button type="button" id="record-stop" class="button secondary" disabled>Stop</button></div><div id="record-message" class="helper-text">Or select an existing video below.</div><form id="upload-form" method="post" enctype="multipart/form-data" action="{{ url_for('submit_practice',scenario_id=scenario.id) }}"><label class="file-picker">Choose video file<input id="video-file" type="file" name="video" accept="video/*" required><span id="file-name">No file selected</span></label><button class="button primary full submit-button" type="submit">Analyze my attempt <span>→</span></button></form><div class="processing" id="processing" hidden><span class="spinner"></span><span>Analyzing your practice clip. This can take a little while.</span></div><p class="privacy-note">Your video is processed for analysis and deleted after the result is saved.</p></section></div>
+<div class="practice-layout">
+  <section class="practice-info">
+    <div class="eyebrow">PRACTICE SCENARIO</div>
+    <div class="signal-icon large">{{ '6' if scenario.expected_signal=='Six' else ('OUT' if scenario.expected_signal=='Out' else ('W' if scenario.expected_signal=='Wide' else 'NB')) }}</div>
+    <div class="scenario-type">EXPECTED SIGNAL · {{ scenario.expected_signal|replace('_',' ')|upper }}</div>
+    <h1>{{ scenario.title }}</h1>
+    <p>{{ scenario.description }}</p>
+    <div class="instruction-list">
+      <div><span>01</span><p>Stand where your upper body and both arms are visible.</p></div>
+      <div><span>02</span><p>Allow camera access, then make and hold the signal.</p></div>
+      <div><span>03</span><p>The photo is captured and analyzed automatically after the countdown.</p></div>
+    </div>
+  </section>
+  <section class="panel recorder-panel">
+    <div class="eyebrow">AUTOMATIC PRACTICE CHECK</div>
+    <h2>Get ready to signal</h2>
+    <p class="muted">Camera starts automatically. Hold the signal when the countdown begins.</p>
+    <div class="recorder-box">
+      <video id="preview" autoplay muted playsinline hidden></video>
+      <div id="placeholder" class="preview-placeholder"><div class="camera-icon">◉</div><span>Starting camera…</span></div>
+      <div id="countdown" class="capture-countdown" hidden></div>
+    </div>
+    <div id="record-message" class="helper-text" role="status" aria-live="polite">Requesting camera access…</div>
+    <form id="upload-form" method="post" enctype="multipart/form-data" action="{{ url_for('submit_practice',scenario_id=scenario.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input id="photo-file" type="file" name="photo" accept="image/jpeg,image/png,image/webp" hidden required>
+    </form>
+    <div class="processing" id="processing" hidden><span class="spinner"></span><span>Photo captured. Analyzing your signal…</span></div>
+    <p class="privacy-note">The captured photo is processed for analysis and deleted after the result is saved.</p>
+  </section>
+</div>
+<canvas id="capture-canvas" hidden></canvas>
 <script src="{{ url_for('static',filename='practice.js') }}" defer></script>
 {% endblock %}

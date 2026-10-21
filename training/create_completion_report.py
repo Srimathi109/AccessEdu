@@ -129,13 +129,13 @@ heading(doc,'Implemented Components')
 table(doc,['Component','Implementation','Purpose'],[
  ('Web application','Flask and server-rendered HTML templates','Local role-based trainee and instructor workflows'),
  ('Video capture','Browser MediaRecorder and file upload','Capture a practice clip without a separate React application'),
- ('Inference','Ultralytics YOLO and OpenCV','Detect No_Action, No_Ball, Out, Six, and Wide'),
+ ('Inference','Ultralytics YOLO and OpenCV','Classify No_Ball, Out, Six, and Wide'),
  ('Persistence','SQLite','Store users, scenarios, and attempt summaries'),
  ('Training assets','Roboflow YOLO dataset and checkpoints','Train and evaluate the cricket signal detector'),
 ],[1.25,2.65,2.7])
 
 heading(doc,'Data and Model')
-para(doc,'The supplied dataset contains 189 labeled images: 165 training, 15 validation, and 9 test images. Its five classes are No_Action, No_Ball, Out, Six, and Wide. The active application checkpoint is runs/detect/accessedu_cricket_v1/weights/best.pt. The application samples frames and aggregates detections; its feedback concerns signal category and confidence, not match-decision correctness or signal technique.')
+para(doc,'The current application supports four cricket umpire signals: No_Ball, Out, Six, and Wide. It samples video frames with an image classifier and aggregates class probabilities. Its feedback concerns signal category and confidence, not match-decision correctness or signal technique.')
 para(doc,'Five deterministic variants were created for each training image: horizontal flip, exposure shift, small rotation/scale/translation with adjusted bounding boxes, reduced-resolution blur, and sensor noise. This produced 825 synthetic images with labels. Because each variant comes from a training image, this is a stress check and cannot serve as independent test evidence.')
 
 heading(doc,'Evaluation Method')

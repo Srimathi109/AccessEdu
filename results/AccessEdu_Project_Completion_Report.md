@@ -53,7 +53,7 @@ The project was organized into five sprints. The sprint themes below reflect the
 |---|---|---|
 | Web application | Flask and server-rendered HTML templates | Local trainee and instructor workflows |
 | Video capture | Browser MediaRecorder and file upload | Capture or submit practice clips |
-| Inference | Ultralytics YOLO and OpenCV | Detect `No_Action`, `No_Ball`, `Out`, `Six`, and `Wide` |
+| Inference | Ultralytics YOLO and OpenCV | Classify `No_Ball`, `Out`, `Six`, and `Wide` |
 | Persistence | SQLite | Store users, scenarios, and attempt summaries |
 | Training assets | Roboflow YOLO dataset and checkpoints | Train and evaluate cricket signal detection |
 
@@ -79,7 +79,7 @@ The original checkpoint and a candidate fine-tuned for five epochs on the origin
 
 The fine-tuned candidate improved synthetic stress mAP50 by about 0.079, but lowered mAP50 on both original splits. It also lowered mAP50-95 on the original validation and test splits. The candidate was therefore **not promoted**; the app continues to use `runs/detect/accessedu_cricket_v1/weights/best.pt`.
 
-The original test score of 0.995 is based on only nine labeled objects and does not cover `Out`. It cannot establish reliable performance across all five classes or across new people and recording conditions. The synthetic set uses altered versions of training images that the model may already have seen, so it is a controlled stress check rather than independent accuracy evidence.
+The original detector test score of 0.995 is based on only nine labeled objects and does not cover `Out`. It cannot establish reliable performance across all four supported classes or across new people and recording conditions. The synthetic set uses altered versions of training images that the model may already have seen, so it is a controlled stress check rather than independent accuracy evidence.
 
 ## Completion assessment
 

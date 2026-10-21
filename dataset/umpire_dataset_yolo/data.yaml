@@ -1,0 +1,6 @@
+path: C:/Users/shalu/AccessEdu-Sport/dataset/umpire_dataset_yolo
+train: train/images
+val: valid/images
+test: test/images
+nc: 5
+names: ['No_Action', 'No_Ball', 'Out', 'Six', 'Wide']
