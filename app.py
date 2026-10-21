@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import hmac
+import math
 import secrets
+import shutil
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
@@ -31,6 +34,7 @@ MODEL_PATH = ROOT / "runs" / "classify" / "accessedu_cricket_four_class" / "weig
 EXPECTED_CLASSES = {"No_Ball", "Out", "Six", "Wide"}
 _MODEL = None
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ATTEMPT_MEDIA_DIR = ROOT / "private_attempts"
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 CLASS_LABELS = {
     "No_Ball": "No Ball",
@@ -40,10 +44,12 @@ CLASS_LABELS = {
 }
 
 app = Flask(__name__, template_folder="app/templates", static_folder="app/static")
+demo_accounts_enabled = os.environ.get("ACCESSEDU_DEMO_ACCOUNTS", "1").lower() not in {"0", "false", "no"}
 app.config.update(
     SECRET_KEY=os.environ.get("ACCESSEDU_SECRET_KEY") or secrets.token_hex(32),
     MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
-    DATABASE=str(ROOT / "accessedu.sqlite3"),
+    DATABASE=os.environ.get("ACCESSEDU_DATABASE", str(ROOT / "accessedu.sqlite3")),
+    SHOW_DEMO_ACCOUNTS=demo_accounts_enabled,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("ACCESSEDU_HTTPS", "").lower() in {"1", "true", "yes"},
@@ -122,18 +128,53 @@ def init_db():
             frame_count INTEGER NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS signal_requirements (
+            signal TEXT PRIMARY KEY,
+            min_attempts INTEGER NOT NULL DEFAULT 3,
+            min_match_rate INTEGER NOT NULL DEFAULT 80
+        );
+        CREATE TABLE IF NOT EXISTS completion_approvals (
+            trainee_id INTEGER PRIMARY KEY REFERENCES users(id),
+            approved_by INTEGER NOT NULL REFERENCES users(id),
+            approved_at TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT ''
+        );
         """
     )
-    accounts = [
-        ("trainee", generate_password_hash("trainee123"), "Demo Trainee", "trainee"),
-        ("instructor", generate_password_hash("instructor123"), "Demo Instructor", "instructor"),
-    ]
+    existing_attempt_columns = {row[1] for row in db.execute("PRAGMA table_info(attempts)")}
+    for column, definition in {
+        "response_seconds": "REAL NOT NULL DEFAULT 0",
+        "instructor_override": "INTEGER",
+        "instructor_feedback": "TEXT NOT NULL DEFAULT ''",
+        "reviewed_by": "INTEGER REFERENCES users(id)",
+        "reviewed_at": "TEXT",
+        "evidence_path": "TEXT",
+        "evidence_consent_at": "TEXT",
+    }.items():
+        if column not in existing_attempt_columns:
+            db.execute(f"ALTER TABLE attempts ADD COLUMN {column} {definition}")
     db.executemany(
-        "INSERT OR IGNORE INTO users(username,password_hash,display_name,role) VALUES(?,?,?,?)",
-        accounts,
+        "INSERT OR IGNORE INTO signal_requirements(signal,min_attempts,min_match_rate) VALUES(?,?,?)",
+        [(signal, 3, 80) for signal in sorted(EXPECTED_CLASSES)],
     )
+    accounts = []
+    if demo_accounts_enabled:
+        accounts.extend([
+            ("trainee", generate_password_hash("trainee123"), "Demo Trainee", "trainee"),
+            ("instructor", generate_password_hash("instructor123"), "Demo Instructor", "instructor"),
+        ])
+    bootstrap_username = os.environ.get("ACCESSEDU_INSTRUCTOR_USERNAME", "").strip().lower()
+    bootstrap_password = os.environ.get("ACCESSEDU_INSTRUCTOR_PASSWORD", "")
+    if bootstrap_username and len(bootstrap_password) >= 12:
+        accounts.append((bootstrap_username, generate_password_hash(bootstrap_password), "Course Instructor", "instructor"))
+    if accounts:
+        db.executemany(
+            "INSERT OR IGNORE INTO users(username,password_hash,display_name,role) VALUES(?,?,?,?)",
+            accounts,
+        )
     db.commit()
-    instructor_id = db.execute("SELECT id FROM users WHERE username='instructor'").fetchone()[0]
+    instructor = db.execute("SELECT id FROM users WHERE role='instructor' ORDER BY id LIMIT 1").fetchone()
+    instructor_id = instructor[0] if instructor else None
     samples = [
         ("Signal practice: Six", "Practise the standard signal for a boundary six.", "Six", 1, instructor_id),
         ("Signal practice: Out", "Practise the standard out signal clearly and hold it briefly.", "Out", 1, instructor_id),
@@ -261,16 +302,38 @@ def dashboard():
     db = database()
     scenarios = db.execute("SELECT * FROM scenarios WHERE active=1 ORDER BY id").fetchall()
     attempts = db.execute(
-        "SELECT a.*,s.title FROM attempts a JOIN scenarios s ON s.id=a.scenario_id "
+        "SELECT a.*,COALESCE(a.instructor_override,a.matched) AS effective_match,s.title FROM attempts a JOIN scenarios s ON s.id=a.scenario_id "
         "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 8",
         (session["user_id"],),
     ).fetchall()
     totals = db.execute(
-        "SELECT COUNT(*) AS total, COALESCE(SUM(matched),0) AS correct FROM attempts WHERE user_id=?",
+        "SELECT COUNT(*) AS total, COALESCE(SUM(COALESCE(instructor_override,matched)),0) AS correct, "
+        "COALESCE(AVG(NULLIF(response_seconds,0)),0) AS avg_response FROM attempts WHERE user_id=?",
         (session["user_id"],),
     ).fetchone()
     rate = round(100 * totals["correct"] / totals["total"]) if totals["total"] else 0
-    return render_template("trainee.html", scenarios=scenarios, attempts=attempts, totals=totals, rate=rate)
+    signal_progress = db.execute(
+        "SELECT r.signal,r.min_attempts,r.min_match_rate,COUNT(a.id) AS attempts, "
+        "COALESCE(SUM(COALESCE(a.instructor_override,a.matched)),0) AS correct "
+        "FROM signal_requirements r LEFT JOIN attempts a ON a.expected_signal=r.signal AND a.user_id=? "
+        "GROUP BY r.signal ORDER BY r.signal", (session["user_id"],)
+    ).fetchall()
+    approval = db.execute(
+        "SELECT * FROM completion_approvals WHERE trainee_id=?", (session["user_id"],)
+    ).fetchone()
+    eligible_for_review = bool(signal_progress) and all(
+        item["attempts"] >= item["min_attempts"]
+        and (100 * item["correct"] / item["attempts"] if item["attempts"] else 0) >= item["min_match_rate"]
+        for item in signal_progress
+    )
+    recommendations = db.execute(
+        "SELECT s.id,s.title,s.expected_signal,COUNT(*) AS misses FROM attempts a "
+        "JOIN scenarios s ON s.id=a.scenario_id WHERE a.user_id=? AND a.matched=0 AND s.active=1 "
+        "GROUP BY s.id ORDER BY misses DESC,s.id LIMIT 2", (session["user_id"],)
+    ).fetchall()
+    return render_template("trainee.html", scenarios=scenarios, attempts=attempts, totals=totals, rate=rate,
+                           signal_progress=signal_progress, approval=approval if eligible_for_review else None,
+                           recommendations=recommendations)
 
 
 @app.route("/practice/<int:scenario_id>")
@@ -292,6 +355,9 @@ def submit_practice(scenario_id):
     ).fetchone()
     if scenario is None:
         abort(404)
+    if request.form.get("evidence_consent") != "yes":
+        flash("Consent to private photo storage before starting the challenge.", "error")
+        return redirect(url_for("practice", scenario_id=scenario_id))
     photo = request.files.get("photo")
     if not photo or not photo.filename:
         flash("Capture or choose a practice photo first.", "error")
@@ -302,6 +368,7 @@ def submit_practice(scenario_id):
         flash("Choose a photo file such as JPG, PNG, or WebP.", "error")
         return redirect(url_for("practice", scenario_id=scenario_id))
     temp_path = None
+    evidence_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix="." + extension) as temp_file:
             temp_path = temp_file.name
@@ -309,6 +376,9 @@ def submit_practice(scenario_id):
         if os.path.getsize(temp_path) > MAX_UPLOAD_BYTES:
             raise ValueError("That photo is over the 10 MB upload limit. Choose a smaller image.")
         predicted, confidence, frame_count = analyze_image(temp_path)
+        ATTEMPT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        evidence_path = ATTEMPT_MEDIA_DIR / f"attempt-{secrets.token_hex(12)}.jpg"
+        shutil.copyfile(temp_path, evidence_path)
     except (RuntimeError, ValueError) as exc:
         flash(str(exc), "error")
         return redirect(url_for("practice", scenario_id=scenario_id))
@@ -317,14 +387,23 @@ def submit_practice(scenario_id):
             os.unlink(temp_path)
     expected = scenario["expected_signal"]
     matched = predicted == expected and confidence >= 0.35
+    try:
+        response_seconds = max(0.0, min(float(request.form.get("response_seconds", "0")), 3600.0))
+    except ValueError:
+        response_seconds = 0.0
+    if not math.isfinite(response_seconds):
+        response_seconds = 0.0
     cursor = database().execute(
-        "INSERT INTO attempts(user_id,scenario_id,expected_signal,predicted_signal,confidence,matched,frame_count,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO attempts(user_id,scenario_id,expected_signal,predicted_signal,confidence,matched,frame_count,created_at,response_seconds,evidence_path,evidence_consent_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             session["user_id"], scenario_id, expected, predicted, confidence, int(matched), frame_count,
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            response_seconds, str(evidence_path), datetime.now(timezone.utc).isoformat(timespec="seconds"),
         ),
     )
+    database().commit()
+    database().execute("DELETE FROM completion_approvals WHERE trainee_id=?", (session["user_id"],))
     database().commit()
     return redirect(url_for("result", attempt_id=cursor.lastrowid))
 
@@ -333,7 +412,7 @@ def submit_practice(scenario_id):
 @role_required("trainee")
 def result(attempt_id):
     attempt = database().execute(
-        "SELECT a.*,s.title FROM attempts a JOIN scenarios s ON s.id=a.scenario_id "
+        "SELECT a.*,COALESCE(a.instructor_override,a.matched) AS effective_match,s.title FROM attempts a JOIN scenarios s ON s.id=a.scenario_id "
         "WHERE a.id=? AND a.user_id=?",
         (attempt_id, session["user_id"]),
     ).fetchone()
@@ -343,21 +422,154 @@ def result(attempt_id):
     return render_template("result.html", attempt=attempt, feedback=feedback)
 
 
+def trainee_progress(db, trainee_id):
+    requirements = db.execute("SELECT * FROM signal_requirements ORDER BY signal").fetchall()
+    progress = []
+    for requirement in requirements:
+        stats = db.execute(
+            "SELECT COUNT(*) AS attempts,COALESCE(SUM(COALESCE(instructor_override,matched)),0) AS correct "
+            "FROM attempts WHERE user_id=? AND expected_signal=?",
+            (trainee_id, requirement["signal"]),
+        ).fetchone()
+        rate = round(100 * stats["correct"] / stats["attempts"]) if stats["attempts"] else 0
+        exact_rate = 100 * stats["correct"] / stats["attempts"] if stats["attempts"] else 0
+        ready = stats["attempts"] >= requirement["min_attempts"] and exact_rate >= requirement["min_match_rate"]
+        progress.append({"signal": requirement["signal"], "attempts": stats["attempts"], "correct": stats["correct"],
+                         "rate": rate, "requirement": requirement, "ready": ready})
+    return progress
+
+
+@app.route("/instructor/attempts/<int:attempt_id>", methods=["GET", "POST"])
+@role_required("instructor")
+def review_attempt(attempt_id):
+    db = database()
+    attempt = db.execute(
+        "SELECT a.*,u.display_name,s.title FROM attempts a JOIN users u ON u.id=a.user_id "
+        "JOIN scenarios s ON s.id=a.scenario_id WHERE a.id=?", (attempt_id,)
+    ).fetchone()
+    if attempt is None:
+        abort(404)
+    if request.method == "POST":
+        decision = request.form.get("decision")
+        feedback = request.form.get("feedback", "").strip()
+        if decision not in {"accept_ai", "pass", "needs_practice"} or not feedback:
+            flash("Choose a review outcome and add feedback for the trainee.", "error")
+            return redirect(url_for("review_attempt", attempt_id=attempt_id))
+        override = None if decision == "accept_ai" else int(decision == "pass")
+        db.execute(
+            "UPDATE attempts SET instructor_override=?,instructor_feedback=?,reviewed_by=?,reviewed_at=? WHERE id=?",
+            (override, feedback[:1000], session["user_id"], datetime.now(timezone.utc).isoformat(timespec="seconds"), attempt_id),
+        )
+        db.execute("DELETE FROM completion_approvals WHERE trainee_id=?", (attempt["user_id"],))
+        db.commit()
+        flash("Instructor review saved.", "success")
+        return redirect(url_for("instructor_trainee", trainee_id=attempt["user_id"]))
+    return render_template("review.html", attempt=attempt)
+
+
+@app.route("/instructor/attempts/<int:attempt_id>/evidence")
+@role_required("instructor")
+def attempt_evidence(attempt_id):
+    attempt = database().execute("SELECT evidence_path FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not attempt or not attempt["evidence_path"]:
+        abort(404)
+    evidence = Path(attempt["evidence_path"]).resolve()
+    if ATTEMPT_MEDIA_DIR.resolve() not in evidence.parents or not evidence.is_file():
+        abort(404)
+    response = send_file(evidence, mimetype="image/jpeg", max_age=0)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.route("/instructor/trainees/<int:trainee_id>")
+@role_required("instructor")
+def instructor_trainee(trainee_id):
+    db = database()
+    trainee = db.execute("SELECT * FROM users WHERE id=? AND role='trainee'", (trainee_id,)).fetchone()
+    if trainee is None:
+        abort(404)
+    attempts = db.execute(
+        "SELECT a.*,COALESCE(a.instructor_override,a.matched) AS effective_match,s.title FROM attempts a JOIN scenarios s ON s.id=a.scenario_id "
+        "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 50", (trainee_id,)
+    ).fetchall()
+    progress = trainee_progress(db, trainee_id)
+    pending_review_count = db.execute(
+        "SELECT COUNT(*) FROM attempts WHERE user_id=? AND reviewed_at IS NULL", (trainee_id,)
+    ).fetchone()[0]
+    error_patterns = db.execute(
+        "SELECT expected_signal,predicted_signal,COUNT(*) AS occurrences FROM attempts "
+        "WHERE user_id=? AND matched=0 GROUP BY expected_signal,predicted_signal "
+        "ORDER BY occurrences DESC LIMIT 6", (trainee_id,)
+    ).fetchall()
+    ready = bool(progress) and all(item["ready"] for item in progress)
+    approval = db.execute("SELECT * FROM completion_approvals WHERE trainee_id=?", (trainee_id,)).fetchone()
+    return render_template("trainee_detail.html", trainee=trainee, attempts=attempts, progress=progress,
+                           error_patterns=error_patterns, ready=ready, pending_review_count=pending_review_count,
+                           review_complete=pending_review_count == 0, approval=approval if ready else None)
+
+
+@app.route("/instructor/requirements", methods=["POST"])
+@role_required("instructor")
+def update_requirements():
+    db = database()
+    for signal in EXPECTED_CLASSES:
+        try:
+            count = int(request.form.get(f"min_attempts_{signal}", ""))
+            rate = int(request.form.get(f"min_rate_{signal}", ""))
+        except ValueError:
+            flash("Enter whole numbers for each signal requirement.", "error")
+            return redirect(url_for("instructor_dashboard"))
+        if not 1 <= count <= 50 or not 50 <= rate <= 100:
+            flash("Attempts must be 1–50 and recognition targets must be 50–100%.", "error")
+            return redirect(url_for("instructor_dashboard"))
+        db.execute("UPDATE signal_requirements SET min_attempts=?,min_match_rate=? WHERE signal=?", (count, rate, signal))
+    db.commit()
+    db.execute("DELETE FROM completion_approvals")
+    db.commit()
+    flash("Readiness criteria updated.", "success")
+    return redirect(url_for("instructor_dashboard"))
+
+
+@app.route("/instructor/trainees/<int:trainee_id>/approve", methods=["POST"])
+@role_required("instructor")
+def approve_completion(trainee_id):
+    db = database()
+    trainee = db.execute("SELECT id FROM users WHERE id=? AND role='trainee'", (trainee_id,)).fetchone()
+    progress = trainee_progress(db, trainee_id)
+    pending_review_count = db.execute(
+        "SELECT COUNT(*) FROM attempts WHERE user_id=? AND reviewed_at IS NULL", (trainee_id,)
+    ).fetchone()[0]
+    if trainee is None or not progress or not all(item["ready"] for item in progress) or pending_review_count:
+        flash("Complete all attempt reviews and meet the current readiness criteria before approval.", "error")
+        return redirect(url_for("instructor_trainee", trainee_id=trainee_id))
+    db.execute(
+        "INSERT INTO completion_approvals(trainee_id,approved_by,approved_at,notes) VALUES(?,?,?,?) "
+        "ON CONFLICT(trainee_id) DO UPDATE SET approved_by=excluded.approved_by,approved_at=excluded.approved_at,notes=excluded.notes",
+        (trainee_id, session["user_id"], datetime.now(timezone.utc).isoformat(timespec="seconds"), request.form.get("notes", "").strip()[:1000]),
+    )
+    db.commit()
+    flash("Completion approval recorded by instructor.", "success")
+    return redirect(url_for("instructor_trainee", trainee_id=trainee_id))
+
+
 @app.route("/instructor")
 @role_required("instructor")
 def instructor_dashboard():
     db = database()
     trainees = db.execute(
-        "SELECT u.id,u.display_name,COUNT(a.id) AS attempts,COALESCE(SUM(a.matched),0) AS correct,"
+        "SELECT u.id,u.display_name,COUNT(a.id) AS attempts,COALESCE(SUM(COALESCE(a.instructor_override,a.matched)),0) AS correct,"
         "MAX(a.created_at) AS last_attempt FROM users u LEFT JOIN attempts a ON a.user_id=u.id "
         "WHERE u.role='trainee' GROUP BY u.id ORDER BY u.display_name"
     ).fetchall()
-    recent = db.execute(
-        "SELECT a.*,u.display_name,s.title FROM attempts a JOIN users u ON u.id=a.user_id "
-        "JOIN scenarios s ON s.id=a.scenario_id ORDER BY a.id DESC LIMIT 20"
-    ).fetchall()
     scenarios = db.execute("SELECT * FROM scenarios ORDER BY active DESC,id").fetchall()
-    return render_template("instructor.html", trainees=trainees, recent=recent, scenarios=scenarios)
+    pending_reviews = db.execute(
+        "SELECT a.id,a.expected_signal,a.predicted_signal,a.confidence,a.created_at,u.display_name,s.title "
+        "FROM attempts a JOIN users u ON u.id=a.user_id JOIN scenarios s ON s.id=a.scenario_id "
+        "WHERE a.reviewed_at IS NULL ORDER BY a.id DESC LIMIT 20"
+    ).fetchall()
+    requirements = db.execute("SELECT * FROM signal_requirements ORDER BY signal").fetchall()
+    return render_template("instructor.html", trainees=trainees, scenarios=scenarios,
+                           pending_reviews=pending_reviews, requirements=requirements)
 
 
 @app.route("/instructor/scenarios", methods=["POST"])

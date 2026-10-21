@@ -7,7 +7,12 @@
   const canvas = document.getElementById('capture-canvas');
   const form = document.getElementById('upload-form');
   const processing = document.getElementById('processing');
+  const consent = document.getElementById('evidence-consent');
+  const startButton = document.getElementById('start-challenge');
+  const responseSeconds = document.getElementById('response-seconds');
+  const consentValue = document.getElementById('evidence-consent-value');
   let stream;
+  let startedAt = 0;
 
   function stopCamera() {
     stream?.getTracks().forEach(track => track.stop());
@@ -20,6 +25,7 @@
     const transfer = new DataTransfer();
     transfer.items.add(file);
     fileInput.files = transfer.files;
+    responseSeconds.value = ((performance.now() - startedAt) / 1000).toFixed(1);
     stopCamera();
     preview.hidden = true;
     countdown.hidden = true;
@@ -29,6 +35,9 @@
   }
 
   async function startAutomaticCapture() {
+    startButton.disabled = true;
+    consent.disabled = true;
+    startedAt = performance.now();
     if (!navigator.mediaDevices?.getUserMedia) {
       message.textContent = 'This browser cannot access a camera. Open the app in a browser that supports camera access.';
       placeholder.querySelector('span').textContent = 'Camera is unavailable';
@@ -72,6 +81,8 @@
       }, 1000);
     } catch (error) {
       stopCamera();
+      consent.disabled = false;
+      startButton.disabled = !consent.checked;
       placeholder.querySelector('span').textContent = 'Camera access is needed';
       message.textContent = 'Allow camera access in your browser, then reload this page. No recording or manual capture is required.';
     }
@@ -81,6 +92,11 @@
     processing.hidden = false;
     message.textContent = 'Analyzing your photo…';
   });
+  consent.addEventListener('change', () => {
+    startButton.disabled = !consent.checked;
+    consentValue.value = consent.checked ? 'yes' : '';
+    if (consent.checked) message.textContent = 'Your photo will be stored privately for instructor review.';
+  });
+  startButton.addEventListener('click', startAutomaticCapture);
   window.addEventListener('beforeunload', stopCamera);
-  startAutomaticCapture();
 })();

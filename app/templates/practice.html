@@ -17,19 +17,23 @@
   <section class="panel recorder-panel">
     <div class="eyebrow">AUTOMATIC PRACTICE CHECK</div>
     <h2>Get ready to signal</h2>
-    <p class="muted">Camera starts automatically. Hold the signal when the countdown begins.</p>
+    <p class="muted">Your camera stays off until you agree below and start the challenge.</p>
     <div class="recorder-box">
       <video id="preview" autoplay muted playsinline hidden></video>
-      <div id="placeholder" class="preview-placeholder"><div class="camera-icon">◉</div><span>Starting camera…</span></div>
+      <div id="placeholder" class="preview-placeholder"><div class="camera-icon">◉</div><span>Camera is off</span></div>
       <div id="countdown" class="capture-countdown" hidden></div>
     </div>
-    <div id="record-message" class="helper-text" role="status" aria-live="polite">Requesting camera access…</div>
+    <div id="record-message" class="helper-text" role="status" aria-live="polite">Agree to evidence storage to start.</div>
+    <label class="consent-row"><input type="checkbox" id="evidence-consent"><span>I agree that this challenge photo will be stored privately so my instructor can review it.</span></label>
+    <button type="button" id="start-challenge" class="button primary full" disabled>Start challenge</button>
     <form id="upload-form" method="post" enctype="multipart/form-data" action="{{ url_for('submit_practice',scenario_id=scenario.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="evidence_consent" id="evidence-consent-value" value="">
+      <input type="hidden" name="response_seconds" id="response-seconds" value="0">
       <input id="photo-file" type="file" name="photo" accept="image/jpeg,image/png,image/webp" hidden required>
     </form>
     <div class="processing" id="processing" hidden><span class="spinner"></span><span>Photo captured. Analyzing your signal…</span></div>
-    <p class="privacy-note">The captured photo is processed for analysis and deleted after the result is saved.</p>
+    <p class="privacy-note">One still photo is kept in private app storage for instructor review. It is not a video recording.</p>
   </section>
 </div>
 <canvas id="capture-canvas" hidden></canvas>

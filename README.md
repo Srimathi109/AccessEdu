@@ -1,6 +1,6 @@
 # AccessEdu — Cricket Umpire Practice and Assessment
 
-AccessEdu is a local web app for trainee cricket umpires. An instructor provides practice scenarios, a trainee captures or uploads a still photo of a signal, the cricket classifier analyzes it, and the trainee receives a summary. Attempts are saved for progress tracking and instructor review.
+AccessEdu is an AI-assisted cricket umpire training and assessment prototype. Instructors create signal challenges, trainees perform a signal on camera, and the image classifier returns a category and confidence estimate. Attempts, response time and a private still-image evidence file are saved for instructor feedback, progress tracking and readiness review.
 
 ## Run locally
 
@@ -27,10 +27,11 @@ These are demonstration credentials for a local prototype. Change them and confi
 ## How practice works
 
 1. An instructor uses the instructor dashboard to review progress and add or archive signal scenarios.
-2. A trainee chooses an active scenario and allows camera access; the browser automatically captures one photo after a five-second countdown.
-3. The classifier predicts the signal from that image.
-4. AccessEdu compares that prediction with the scenario's expected signal and provides practice guidance.
-5. The attempt is saved in SQLite for the trainee's history and the instructor's summary.
+2. A trainee chooses an active scenario, consents to private evidence storage and starts the camera; one photo is captured after a five-second countdown.
+3. The classifier predicts a signal category from that still image and reports confidence.
+4. AccessEdu compares the prediction with the challenge's expected signal and recommends practice based on attempt history.
+5. The attempt, response time and photo evidence are stored for the instructor to review, correct and add coaching feedback.
+6. Instructors set per-signal practice requirements. Meeting them recommends instructor review; an instructor can then record a completion approval.
 
 Automatic photo capture requires camera permission and a secure context (localhost is supported). Trainees do not need to record a video or press a capture button.
 
@@ -40,7 +41,7 @@ The active cricket classifier is `runs/classify/accessedu_cricket_four_class/wei
 
 The four-class image-classification dataset is generated at `dataset/umpire_classifier_four_class`, with `train`, `val`, and `test` folders. It includes the supported uploaded signal folders and person crops from the original YOLO labels; the No_Action folder and class-0 crops are excluded. The uploaded dataset contains still images, not video sequences. See `results/umpire_classifier_report.md` for held-out metrics and model limitations.
 
-Automated feedback only reports the signal category recognized in the photo, confidence, and whether it matches the practice scenario. The current model does not evaluate fine hand position, signal duration, decision correctness, or readiness for certification. Treat results as practice guidance and validate them with qualified instructors before using them for formal assessment.
+Automated feedback only reports the signal category recognized in one photo, confidence, and whether it matches the practice scenario. The current model does not analyze movement, fine hand position, signal duration, decision correctness, or readiness for certification. Response time is an approximate browser-side measure from camera start to submission. Treat model output and readiness metrics as practice guidance; only the instructor can approve local course completion, which is not an official umpire qualification.
 
 To regenerate the combined classifier dataset and fine-tune a candidate, run `python training/train_cricket_model.py`. The script starts from the current checkpoint, preserves validation and test images, and writes a four-class candidate under `runs/classify/`. It does not automatically replace the active checkpoint.
 
@@ -48,8 +49,8 @@ The dataset was exported from Roboflow Universe under CC BY 4.0; see `README.dat
 
 ## Deployment notes
 
-Do not use Flask's built-in development server for a public deployment. Waitress is included for production serving on Windows; after installing `requirements.txt`, set a stable, randomly generated `ACCESSEDU_SECRET_KEY` and `ACCESSEDU_HTTPS=1` in the hosting environment, then run `waitress-serve --listen=127.0.0.1:8080 app:app` behind an HTTPS reverse proxy. Form submissions use session-bound CSRF tokens, and responses include baseline browser security headers. Never publish the demo credentials or use them for a public deployment. The app exposes `GET /health` as a lightweight liveness check.
+Do not use Flask's built-in development server for a public deployment. Waitress is included for production serving on Windows; after installing `requirements.txt`, configure a stable, randomly generated `ACCESSEDU_SECRET_KEY`, `ACCESSEDU_HTTPS=1`, `ACCESSEDU_DEMO_ACCOUNTS=0`, `ACCESSEDU_DATABASE` pointing at a new persistent database, and strong `ACCESSEDU_INSTRUCTOR_USERNAME` / `ACCESSEDU_INSTRUCTOR_PASSWORD` values (the bootstrap password must be at least 12 characters). Then run `waitress-serve --listen=127.0.0.1:8080 app:app` behind an HTTPS reverse proxy. Demo accounts are disabled and hidden on the login page in this setup. Form submissions use session-bound CSRF tokens, and responses include baseline browser security headers. The app exposes `GET /health` as a lightweight liveness check.
 
-Uploads are limited to 10 MB and accepted images are processed from a temporary file that is deleted after analysis. The SQLite database and model checkpoint must be present on persistent storage at the paths configured in `app.py`; SQLite is intended for a single application instance on a local persistent volume. Back up the database and model files as part of deployment operations. Camera access requires HTTPS outside localhost.
+Uploads are limited to 10 MB. The temporary inference copy is deleted after analysis; with trainee consent, the captured still photo is retained in the private `private_attempts/` directory and is served to signed-in instructors through an authorization-checked route. Set and follow an appropriate evidence-retention policy for your organization. The SQLite database, model checkpoint and private attempt evidence must be on persistent storage at the paths configured in `app.py`; SQLite is intended for a single application instance on a local persistent volume. Back up the database and model files as part of deployment operations. Camera access requires HTTPS outside localhost.
 
 The model checkpoint currently in use is `runs/classify/accessedu_cricket_four_class/weights/best.pt`. Training is provided as the Python script `training/train_cricket_model.py`; this repository does not currently contain a Jupyter `.ipynb` notebook.
